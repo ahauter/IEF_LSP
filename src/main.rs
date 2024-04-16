@@ -3,16 +3,18 @@ use lsp_server::{
     Connection, ExtractError, Message, Notification, Request, RequestId, Response, ResponseError,
 };
 use lsp_types::{
-    notification, DiagnosticOptions, DiagnosticServerCapabilities, OneOf, TextDocumentIdentifier,
+    notification, Diagnostic, DiagnosticOptions, DiagnosticServerCapabilities, OneOf, Position,
+    TextDocumentIdentifier,
 };
 use lsp_types::{
-    DocumentDiagnosticReport, FullDocumentDiagnosticReport, InitializeParams,
-    PublishDiagnosticsParams, RelatedFullDocumentDiagnosticReport, ServerCapabilities,
-    TextDocumentContentChangeEvent, TextDocumentSyncCapability, TextDocumentSyncKind, Url,
-    VersionedTextDocumentIdentifier,
+    DocumentDiagnosticReport, DocumentDiagnosticReportKind, FullDocumentDiagnosticReport,
+    InitializeParams, PublishDiagnosticsParams, RelatedFullDocumentDiagnosticReport,
+    ServerCapabilities, TextDocumentContentChangeEvent, TextDocumentSyncCapability,
+    TextDocumentSyncKind, Url, VersionedTextDocumentIdentifier,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Debug, Display};
 use std::io::Write;
@@ -107,33 +109,40 @@ fn handle_request(workspace: &mut IEF_Workspace, req: Request) -> Vec<Message> {
                     }),
                 })];
             };
-            //TODo this is stupid and complicated and I don't need to do it like this
-            //So maybe one day I will fix it
-            return workspace
-                .get_diagnostics()
-                .iter()
-                .filter_map(|(uri, diags)| {
-                    if uri != doc_uri.unwrap() {
-                        return None;
-                    };
-                    Some(Message::Response(Response {
-                        id: req.id.clone(),
-                        result: Some(
-                            serde_json::to_value(DocumentDiagnosticReport::Full(
-                                RelatedFullDocumentDiagnosticReport {
-                                    full_document_diagnostic_report: FullDocumentDiagnosticReport {
-                                        result_id: None,
-                                        items: diags.to_owned(),
-                                    },
-                                    related_documents: None,
-                                },
-                            ))
-                            .unwrap(),
-                        ),
-                        error: None,
-                    }))
-                })
-                .collect();
+            let doc_uri = doc_uri.unwrap().as_str().unwrap().to_string();
+            let mut diagnostic_req_res = workspace.get_diagnostics();
+            let doc_diagnostics = diagnostic_req_res.remove(&doc_uri).unwrap_or(vec![]);
+            let mess = Message::Response(Response {
+                id: req.id.clone(),
+                result: Some(
+                    serde_json::to_value(DocumentDiagnosticReport::Full(
+                        RelatedFullDocumentDiagnosticReport {
+                            full_document_diagnostic_report: FullDocumentDiagnosticReport {
+                                result_id: Some(req.id.to_string().clone()),
+                                items: doc_diagnostics,
+                            },
+                            related_documents: Some(HashMap::from_iter(
+                                diagnostic_req_res.iter().map(|(uri_str, diag_vec)| {
+                                    (
+                                        Url::from_str(uri_str).unwrap(),
+                                        DocumentDiagnosticReportKind::Full(
+                                            FullDocumentDiagnosticReport {
+                                                result_id: Some(req.id.to_string().clone()),
+                                                items: diag_vec.to_owned(),
+                                            },
+                                        ),
+                                    )
+                                }),
+                            )),
+                        },
+                    ))
+                    .unwrap(),
+                ),
+                error: None,
+            });
+
+            info!("Diagnoistics req result {:?}", mess);
+            return vec![mess];
         }
         _ => {
             info!("Unsupported method! {req:?}");
@@ -166,6 +175,7 @@ fn handle_notification(worksp: &mut IEF_Workspace, not: Notification) -> Vec<Mes
                     })
                 })
                 .collect();
+            info!("Save diagnostics results: {:?}", results);
             return results;
         }
         "textDocument/didClose" => info!("{:?}", not.method),

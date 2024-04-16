@@ -129,7 +129,9 @@ pub struct IEF_Workspace<'a> {
 }
 impl IEF_Workspace<'_> {
     pub fn find_policy_by_id(&self, id: &str) -> Option<&IEF_Policy> {
-        self.policies.values().find(|p| p.id.as_str() == id)
+        self.policies
+            .values()
+            .find(|p| p.id.as_str().to_lowercase() == id.to_lowercase())
     }
 
     fn handle_edit(&mut self, uri: Url, edit: &TextEdit) -> Result<(), UpdateDocError> {
@@ -174,8 +176,12 @@ impl IEF_Workspace<'_> {
             .parser
             .parse(policy.text.text(), Some(&policy.tree))
             .unwrap_or(policy.tree.clone());
+        policy.base_id = base_policy_query(policy.text.text(), policy.tree.root_node());
+        policy.id =
+            id_query(policy.text.text(), policy.tree.root_node()).unwrap_or(String::from(""));
         Ok(())
     }
+
     pub fn update_document(
         &mut self,
         document: Url,
@@ -197,33 +203,42 @@ impl IEF_Workspace<'_> {
         }
         Ok(())
     }
+
     pub fn get_diagnostics(&self) -> HashMap<String, Vec<Diagnostic>> {
         self.policies
             .iter()
             .filter_map(|(path, policy)| match &policy.base_id {
                 None => None,
                 Some(base_id) => match self.find_policy_by_id(base_id.as_str()) {
-                    Some(p) => None,
+                    Some(p) => {
+                        let range_opt =
+                            base_policy_query_range(&policy.text.text(), policy.tree.root_node());
+                        if range_opt.is_none() {
+                            return None;
+                        }
+                        let diagnostics = vec![];
+                        info!("Calculated diagnostics {diagnostics:?} for file {path:?}");
+                        return Some((to_uri(path), diagnostics));
+                    }
                     None => {
                         let range_opt =
                             base_policy_query_range(&policy.text.text(), policy.tree.root_node());
                         if range_opt.is_none() {
                             return None;
                         }
-                        return Some((
-                            to_uri(path),
-                            vec![Diagnostic {
-                                range: range_opt.unwrap(),
-                                severity: Some(DiagnosticSeverity::ERROR),
-                                code: None,
-                                code_description: None,
-                                source: Some(String::from("IEF_LSP")),
-                                related_information: None,
-                                tags: None,
-                                data: None,
-                                message: format!("Policy with ID {} does not exist!", base_id),
-                            }],
-                        ));
+                        let diagnostics = vec![Diagnostic {
+                            range: range_opt.unwrap(),
+                            severity: Some(DiagnosticSeverity::ERROR),
+                            code: None,
+                            code_description: None,
+                            source: Some(String::from("IEF_LSP")),
+                            related_information: None,
+                            tags: None,
+                            data: None,
+                            message: format!("Policy with ID {} does not exist!", base_id),
+                        }];
+                        info!("Calculated diagnostics {diagnostics:?} for file {path:?}");
+                        return Some((to_uri(path), diagnostics));
                     }
                 },
             })

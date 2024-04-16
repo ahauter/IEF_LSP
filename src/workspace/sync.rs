@@ -1,3 +1,4 @@
+use log::info;
 use lsp_types::{Position, Range, TextEdit};
 pub struct TextSync {
     raw_text: String,
@@ -44,8 +45,12 @@ impl TextSync {
             "" => delete_range(&mut self.raw_text, start_byte, end_byte),
             _ => insert_text(&mut self.raw_text, text.as_str(), start_byte),
         };
+        info!("Updating text");
+        info!("Old text {:?}", self.raw_text);
+        info!("New text {new_text:?}");
         self.raw_text = new_text;
     }
+
     pub fn lines(&self) -> usize {
         self.raw_text.lines().count()
     }
