@@ -1,16 +1,16 @@
 use log::{debug, error, info, warn};
 use lsp_types::{
-    Diagnostic, DiagnosticSeverity, DocumentChanges, Location, OneOf, Position, Range,
+    Diagnostic, DiagnosticSeverity, DocumentChanges, Location, OneOf,
     TextDocumentContentChangeEvent, TextEdit, Url,
 };
 use std::ffi::OsStr;
 use std::fs;
 use std::path::Path;
 use std::{collections::HashMap, io::Error};
-use tree_sitter::{InputEdit, Node, Parser, Point, QueryCursor, Tree};
 use tree_sitter_xml;
 
 use self::sync::TextSync;
+mod queries;
 mod sync;
 
 pub struct IEF_Policy {
@@ -18,75 +18,6 @@ pub struct IEF_Policy {
     tree: Tree,
     pub id: String,
     pub base_id: Option<String>,
-}
-
-fn base_policy_query(text: &str, root_node: Node) -> Option<String> {
-    let query_str = "(element 
-      (STag 
-        (Name) @tagName) 
-      (content 
-        (element
-          (STag 
-            (Name) @innerName) 
-          (content) @basePolicyId
-          (#eq? @innerName \"PolicyId\")) @content 
-        (#eq? @tagName \"BasePolicy\")))
-      ";
-    let query = tree_sitter::Query::new(&tree_sitter_xml::language_xml(), query_str).unwrap();
-    let mut cursor = QueryCursor::new();
-    return cursor
-        .matches(&query, root_node, text.as_bytes())
-        .filter_map(|m| m.captures.last())
-        .filter_map(|c| c.node.utf8_text(text.as_bytes()).ok())
-        .map(|s| String::from(s).replace("\"", ""))
-        .last();
-}
-
-fn base_policy_query_range(text: &str, root_node: Node) -> Option<Range> {
-    let query_str = "(element 
-      (STag 
-        (Name) @tagName) 
-      (content 
-        (element
-          (STag 
-            (Name) @innerName) 
-          (content) @basePolicyId
-          (#eq? @innerName \"PolicyId\")) @content 
-        (#eq? @tagName \"BasePolicy\")))
-      ";
-    let query = tree_sitter::Query::new(&tree_sitter_xml::language_xml(), query_str).unwrap();
-    let mut cursor = QueryCursor::new();
-    return cursor
-        .matches(&query, root_node, text.as_bytes())
-        .filter_map(|m| m.captures.last())
-        .map(|c| {
-            let node = c.node;
-            let start = Position {
-                line: node.start_position().row as u32,
-                character: node.start_position().column as u32,
-            };
-            let end = Position {
-                line: node.start_position().row as u32,
-                character: node.start_position().column as u32,
-            };
-            return Range { start, end };
-        })
-        .last();
-}
-
-fn id_query(text: &str, root_node: Node) -> Option<String> {
-    let query = tree_sitter::Query::new(
-        &tree_sitter_xml::language_xml(),
-        "(element (STag (Name) (Attribute (Name) @name (AttValue) @policyId (#eq? @name \"PolicyId\")))) ",
-    )
-    .unwrap();
-    let mut cursor = QueryCursor::new();
-    return cursor
-        .matches(&query, root_node, text.as_bytes())
-        .filter_map(|m| m.captures.last())
-        .filter_map(|c| c.node.utf8_text(text.as_bytes()).ok())
-        .map(|s| String::from(s).replace("\"", ""))
-        .last();
 }
 
 impl IEF_Policy {
