@@ -7,8 +7,10 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::Path;
 use std::{collections::HashMap, io::Error};
+use tree_sitter::{InputEdit, Node, Parser, Point, Query, QueryCursor, Tree};
 use tree_sitter_xml;
 
+use self::queries::{base_policy_query, id_query, null_range, IEFQuery, IEFQueryMatch};
 use self::sync::TextSync;
 mod queries;
 mod sync;
@@ -17,7 +19,7 @@ pub struct IEF_Policy {
     text: TextSync,
     tree: Tree,
     pub id: String,
-    pub base_id: Option<String>,
+    pub base_id: Option<IEFQueryMatch>,
 }
 
 impl IEF_Policy {
@@ -31,14 +33,26 @@ impl IEF_Policy {
             None => return None,
             Some(tree) => tree,
         };
-        let id = id_query(text.text(), tree.root_node()).unwrap_or(String::new());
-        let base_id = base_policy_query(text.text(), tree.root_node());
-        return Some(IEF_Policy {
+        let mut new_policy = IEF_Policy {
             tree,
             text,
-            id,
-            base_id,
-        });
+            id: String::from(""),
+            base_id: None,
+        };
+        new_policy.compute_ids();
+        return Some(new_policy);
+    }
+    pub fn compute_ids(&mut self) {
+        let id_query = id_query();
+        let base_query = base_policy_query();
+        let id = id_query
+            .first(self.tree.root_node(), self.text.text())
+            .unwrap_or(queries::IEFQueryMatch {
+                txt: String::from(""),
+                range: null_range(),
+            })
+            .txt;
+        let base_id = base_query.first(self.tree.root_node(), self.text.text());
     }
 }
 struct UpdateDocError {
@@ -107,9 +121,7 @@ impl IEF_Workspace<'_> {
             .parser
             .parse(policy.text.text(), Some(&policy.tree))
             .unwrap_or(policy.tree.clone());
-        policy.base_id = base_policy_query(policy.text.text(), policy.tree.root_node());
-        policy.id =
-            id_query(policy.text.text(), policy.tree.root_node()).unwrap_or(String::from(""));
+        policy.compute_ids();
         Ok(())
     }
 
