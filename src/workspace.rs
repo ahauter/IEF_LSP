@@ -42,6 +42,49 @@ impl IEF_Policy {
         new_policy.compute_ids();
         return Some(new_policy);
     }
+
+    pub fn handle_edit(
+        &mut self,
+        parser: &mut Parser,
+        edit: &TextEdit,
+    ) -> Result<(), UpdateDocError> {
+        let start_line = edit.range.start.line.try_into().unwrap();
+        let start_char = edit.range.start.character.try_into().unwrap();
+        let end_line = edit.range.end.line.try_into().unwrap();
+        let end_char = edit.range.end.character.try_into().unwrap();
+        if edit.new_text == "" {
+            self.tree.edit(&InputEdit {
+                start_byte: self.text.byte_pos(start_line, start_char),
+                start_position: Point::new(start_line, start_char),
+                old_end_byte: self.text.byte_pos(end_line, end_char),
+                old_end_position: Point::new(end_line, end_char),
+                new_end_byte: self.text.byte_pos(start_line, start_char),
+                new_end_position: Point::new(start_line, start_char),
+            });
+        } else {
+            let new_lines = edit.new_text.lines().count();
+            let mut new_chars = edit.new_text.lines().last().unwrap().len();
+            if new_lines == 0 {
+                new_chars += start_char;
+            }
+            let new_bytes = edit.new_text.len();
+            self.tree.edit(&InputEdit {
+                start_byte: self.text.byte_pos(start_line, start_char),
+                start_position: Point::new(start_line, start_char),
+                old_end_byte: self.text.byte_pos(end_line, end_char),
+                old_end_position: Point::new(end_line, end_char),
+                new_end_byte: self.text.byte_pos(start_line + new_lines, new_chars) + new_bytes,
+                new_end_position: Point::new(start_line + new_lines, new_chars),
+            });
+        }
+        self.text.edit(edit);
+        self.tree = parser
+            .parse(self.text.text(), Some(&self.tree))
+            .unwrap_or(self.tree.clone());
+        self.compute_ids();
+        return Ok(());
+    }
+
     pub fn compute_ids(&mut self) {
         let id_query = id_query();
         let base_query = base_policy_query();
@@ -53,6 +96,8 @@ impl IEF_Policy {
             })
             .txt;
         let base_id = base_query.first(self.tree.root_node(), self.text.text());
+        self.id = id;
+        self.base_id = base_id;
     }
 }
 struct UpdateDocError {
@@ -87,42 +132,7 @@ impl IEF_Workspace<'_> {
             Some(p) => p,
             None => return Err(UpdateDocError::new("Document not found")),
         };
-        let start_line = edit.range.start.line.try_into().unwrap();
-        let start_char = edit.range.start.character.try_into().unwrap();
-        let end_line = edit.range.end.line.try_into().unwrap();
-        let end_char = edit.range.end.character.try_into().unwrap();
-        if edit.new_text == "" {
-            policy.tree.edit(&InputEdit {
-                start_byte: policy.text.byte_pos(start_line, start_char),
-                start_position: Point::new(start_line, start_char),
-                old_end_byte: policy.text.byte_pos(end_line, end_char),
-                old_end_position: Point::new(end_line, end_char),
-                new_end_byte: policy.text.byte_pos(start_line, start_char),
-                new_end_position: Point::new(start_line, start_char),
-            });
-        } else {
-            let new_lines = edit.new_text.lines().count();
-            let mut new_chars = edit.new_text.lines().last().unwrap().len();
-            if new_lines == 0 {
-                new_chars += start_char;
-            }
-            let new_bytes = edit.new_text.len();
-            policy.tree.edit(&InputEdit {
-                start_byte: policy.text.byte_pos(start_line, start_char),
-                start_position: Point::new(start_line, start_char),
-                old_end_byte: policy.text.byte_pos(end_line, end_char),
-                old_end_position: Point::new(end_line, end_char),
-                new_end_byte: policy.text.byte_pos(start_line + new_lines, new_chars) + new_bytes,
-                new_end_position: Point::new(start_line + new_lines, new_chars),
-            });
-        }
-        policy.text.edit(edit);
-        policy.tree = self
-            .parser
-            .parse(policy.text.text(), Some(&policy.tree))
-            .unwrap_or(policy.tree.clone());
-        policy.compute_ids();
-        Ok(())
+        policy.handle_edit(&mut self.parser, edit)
     }
 
     pub fn update_document(
@@ -150,40 +160,50 @@ impl IEF_Workspace<'_> {
     pub fn get_diagnostics(&self) -> HashMap<String, Vec<Diagnostic>> {
         self.policies
             .iter()
-            .filter_map(|(path, policy)| match &policy.base_id {
-                None => None,
-                Some(base_id) => match self.find_policy_by_id(base_id.as_str()) {
-                    Some(p) => {
-                        let range_opt =
-                            base_policy_query_range(&policy.text.text(), policy.tree.root_node());
-                        if range_opt.is_none() {
-                            return None;
+            .filter_map(|(path, policy)| {
+                let mut diagnostics = vec![];
+                match &policy.base_id {
+                    None => {}
+                    Some(base_id) => match self.find_policy_by_id(base_id.txt.as_str()) {
+                        Some(p) => {
+                            info!("Calculated diagnostics {diagnostics:?} for file {path:?}");
                         }
-                        let diagnostics = vec![];
-                        info!("Calculated diagnostics {diagnostics:?} for file {path:?}");
-                        return Some((to_uri(path), diagnostics));
-                    }
-                    None => {
-                        let range_opt =
-                            base_policy_query_range(&policy.text.text(), policy.tree.root_node());
-                        if range_opt.is_none() {
-                            return None;
+                        None => {
+                            diagnostics.push(Diagnostic {
+                                range: base_id.range,
+                                severity: Some(DiagnosticSeverity::ERROR),
+                                code: None,
+                                code_description: None,
+                                source: Some(String::from("IEF_LSP")),
+                                related_information: None,
+                                tags: None,
+                                data: None,
+                                message: format!(
+                                    "Policy with ID {:?} does not exist!",
+                                    base_id.txt
+                                ),
+                            });
+                            info!("Calculated diagnostics {diagnostics:?} for file {path:?}");
                         }
-                        let diagnostics = vec![Diagnostic {
-                            range: range_opt.unwrap(),
-                            severity: Some(DiagnosticSeverity::ERROR),
-                            code: None,
-                            code_description: None,
-                            source: Some(String::from("IEF_LSP")),
-                            related_information: None,
-                            tags: None,
-                            data: None,
-                            message: format!("Policy with ID {} does not exist!", base_id),
-                        }];
-                        info!("Calculated diagnostics {diagnostics:?} for file {path:?}");
-                        return Some((to_uri(path), diagnostics));
-                    }
-                },
+                    },
+                }
+                info!("Policy id {:?}", policy.id);
+                if policy.id.as_str() == "" {
+                    diagnostics.push(Diagnostic {
+                        //TODO search for TrustFramework base tag
+                        range: null_range(),
+                        severity: Some(DiagnosticSeverity::ERROR),
+                        code: None,
+                        code_description: None,
+                        source: Some(String::from("IEF_LSP")),
+                        related_information: None,
+                        tags: None,
+                        data: None,
+                        //TODO liven this message up
+                        message: format!("Policy requires a Policy ID"),
+                    });
+                }
+                return Some((to_uri(path), diagnostics));
             })
             .collect()
     }
