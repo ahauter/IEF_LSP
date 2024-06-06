@@ -66,7 +66,7 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
     let (connection, io_threads) = Connection::stdio();
     log::set_logger(&LOGGER).map(|()| log::set_max_level(LevelFilter::Info));
     let server_capabilities = serde_json::to_value(&ServerCapabilities {
-        definition_provider: None,
+        definition_provider: Some(OneOf::Left(true)),
         diagnostic_provider: Some(DiagnosticServerCapabilities::Options(DiagnosticOptions {
             identifier: None,
             inter_file_dependencies: true,
@@ -75,6 +75,8 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
                 work_done_progress: None,
             },
         })),
+        declaration_provider: Some(lsp_types::DeclarationCapability::Simple(true)),
+        references_provider: Some(OneOf::Left(true)),
         text_document_sync: Some(TextDocumentSyncCapability::Kind(
             TextDocumentSyncKind::INCREMENTAL,
         )),
@@ -93,6 +95,7 @@ fn main() -> Result<(), Box<dyn Error + Sync + Send>> {
 fn handle_request(workspace: &mut IEF_Workspace, req: Request) -> Vec<Message> {
     info!("Got request {:?}", req);
     match req.method.as_str() {
+        //This bit is ugly and I dont like it
         "textDocument/diagnostic" => {
             let doc_uri = match req.params.get("textDocument") {
                 Some(doc) => doc.get("uri"),
